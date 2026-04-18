@@ -1,0 +1,14 @@
+# Pigeon Nest Voice
+
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.idea/
+.vscode/
+logs/

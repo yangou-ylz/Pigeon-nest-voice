@@ -1,0 +1,67 @@
+version: "1.0"
+
+rules:
+  # ── 取物品任务 ──
+  - name: "fetch_item"
+    description: "取物品任务"
+    priority: 10
+    enabled: true
+    intent_match: "fetch_item"
+    required_params:
+      - name: item
+        clarify_prompt: "你想要什么物品？请说具体一点，比如「青柠味乐事薯片」。"
+    actions:
+      - type: reply
+        message: "好的，我这就去拿{{item}}。"
+      - type: http_call
+        url: "{{robot_api_base}}/fetch"
+        method: POST
+        body:
+          item: "{{item}}"
+    fallback:
+      message: "抱歉，取物任务暂时无法执行。"
+
+  # ── 查询天气 ──
+  - name: "query_weather"
+    description: "查询天气"
+    priority: 5
+    enabled: true
+    intent_match: "query_weather"
+    actions:
+      - type: reply
+        message: "正在查询天气信息，请稍候..."
+    fallback:
+      message: "抱歉，天气查询暂时不可用。"
+
+  # ── 查询时间 ──
+  - name: "query_time"
+    description: "查询当前时间"
+    priority: 5
+    enabled: true
+    intent_match: "query_time"
+    actions:
+      - type: reply
+        message: "正在获取当前时间..."
+    fallback:
+      message: "抱歉，无法获取时间。"
+
+  # ── 控制设备 ──
+  - name: "control_device"
+    description: "控制智能设备"
+    priority: 8
+    enabled: true
+    intent_match: "control_device"
+    required_params:
+      - name: device
+        clarify_prompt: "你想控制什么设备？比如「空调」「灯」。"
+    actions:
+      - type: reply
+        message: "好的，正在{{operation}}{{device}}。"
+      - type: http_call
+        url: "{{robot_api_base}}/control"
+        method: POST
+        body:
+          operation: "{{operation}}"
+          device: "{{device}}"
+    fallback:
+      message: "抱歉，设备控制暂时无法执行。"
