@@ -44,6 +44,18 @@ class WhisperSTT(BaseSTT):
             model_size = settings.whisper_model
             device = settings.whisper_device
             compute_type = settings.whisper_compute_type
+
+            # 智能选择设备和计算类型
+            if device == "auto":
+                try:
+                    import torch
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                except ImportError:
+                    device = "cpu"
+
+            if compute_type == "auto":
+                compute_type = "float16" if device == "cuda" else "int8"
+
             logger.info(
                 "加载 Whisper 模型: %s (device=%s, compute=%s)",
                 model_size, device, compute_type,

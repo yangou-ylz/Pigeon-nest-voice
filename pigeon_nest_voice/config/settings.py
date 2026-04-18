@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     stt_provider: str = "whisper"
     whisper_model: str = "medium"            # tiny / base / small / medium / large
     whisper_device: str = "auto"             # auto / cpu / cuda
-    whisper_compute_type: str = "int8"       # float16 / int8 / int8_float16
+    whisper_compute_type: str = "auto"       # auto / float16 / int8 / int8_float16
 
     # ── TTS (Edge) ──
     tts_provider: str = "edge"
