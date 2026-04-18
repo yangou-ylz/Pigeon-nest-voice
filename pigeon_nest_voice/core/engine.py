@@ -1,12 +1,16 @@
 """核心流水线引擎 — 编排对话/任务处理流程。"""
 
 import logging
+from typing import TYPE_CHECKING
 
 from pigeon_nest_voice.services.llm.base import BaseLLM
 from pigeon_nest_voice.core.session import SessionManager, Session
 from pigeon_nest_voice.intelligence.intent.base import BaseIntentParser, Intent, IntentType, PendingTask
 from pigeon_nest_voice.intelligence.rules.engine import RuleEngine, Rule
 from pigeon_nest_voice.plugins.manager import PluginManager
+
+if TYPE_CHECKING:
+    from pigeon_nest_voice.dispatcher.scheduler import TaskScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +48,14 @@ class PipelineEngine:
         intent_parser: BaseIntentParser,
         rule_engine: RuleEngine,
         plugin_manager=None,
+        task_scheduler: "TaskScheduler | None" = None,
     ):
         self.llm = llm
         self.session_mgr = session_mgr
         self.intent_parser = intent_parser
         self.rule_engine = rule_engine
         self.plugin_manager = plugin_manager
+        self.task_scheduler = task_scheduler
 
     async def process_text(self, text: str, session_id: str | None = None) -> tuple[str, str]:
         """处理文字输入，返回 (回复文字, session_id)。"""
@@ -95,7 +101,11 @@ class PipelineEngine:
         return reply
 
     async def _handle_task(self, intent: Intent, session: Session) -> str:
-        """任务分支: 优先走插件，无插件则走规则引擎。"""
+        """任务分支: 调度器优先 → 插件 → 规则引擎。"""
+        # ── 调度器路径（新系统：设备控制/复杂任务走调度器） ──
+        if self.task_scheduler and self._should_dispatch(intent):
+            return await self._dispatch_task(intent, session)
+
         # ── 插件优先 ──
         if self.plugin_manager and self.plugin_manager.has_action(intent.action):
             result = await self.plugin_manager.execute(intent.action, intent.params)
@@ -175,6 +185,43 @@ class PipelineEngine:
 
         prompt = next_missing.clarify_prompt or f"请补充 {next_missing.name} 信息。"
         return prompt
+
+    # ── 调度器集成 ──
+
+    def _should_dispatch(self, intent: Intent) -> bool:
+        """判断该意图是否应走调度器（而非插件/规则引擎）。
+
+        策略: 只有 TASK_CONTROL（设备控制类）走调度器。
+        TASK_QUERY / TASK_FETCH 等查询类仍走插件/规则引擎直接返回结果。
+        """
+        if intent.type == IntentType.TASK_CONTROL:
+            return True
+        return False
+
+    async def _dispatch_task(self, intent: Intent, session: Session) -> str:
+        """通过调度器分发任务。"""
+        from pigeon_nest_voice.dispatcher.task import Task, TaskPriority
+
+        task = Task(
+            name=f"{intent.action}",
+            action=intent.action,
+            params=dict(intent.params),
+            priority=TaskPriority.HIGH,
+            session_id=session.session_id,
+            target_device=intent.params.get("device", ""),
+        )
+
+        submitted = await self.task_scheduler.submit(task)
+
+        if submitted.is_terminal:
+            # 安全检查未通过等情况
+            return f"任务被拒绝: {submitted.error}"
+
+        return (
+            f"任务已提交到调度器 [ID: {submitted.task_id}]\n"
+            f"动作: {submitted.action}, 优先级: {submitted.priority.name}\n"
+            f"状态: {submitted.status.value}"
+        )
 
     async def _maybe_compress(self, session: Session):
         """如果会话消息过长，用 LLM 生成摘要后压缩。"""

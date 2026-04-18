@@ -14,7 +14,7 @@ from pigeon_nest_voice.core.logging_config import setup_logging
 # 日志系统必须在其他模块导入之前初始化
 setup_logging()
 
-from pigeon_nest_voice.api.routes import router as api_router, _session_mgr
+from pigeon_nest_voice.api.routes import router as api_router, _session_mgr, _task_scheduler, _device_manager
 from pigeon_nest_voice.core.thread_pool import ThreadPoolManager
 
 logger = logging.getLogger(__name__)
@@ -34,10 +34,21 @@ async def lifespan(app: FastAPI):
     logger.info("🕊️ %s 启动中...", settings.app_name)
     pool = ThreadPoolManager.get_instance()
     cleanup_task = asyncio.create_task(_session_cleanup_loop())
+
+    # 启动调度系统
+    await _task_scheduler.start()
+    await _device_manager.start_heartbeat()
+
     logger.info("✅ 服务就绪: http://%s:%d", settings.host, settings.port)
     yield
     logger.info("🔄 服务关闭中...")
     cleanup_task.cancel()
+
+    # 停止调度系统
+    await _task_scheduler.stop()
+    await _device_manager.stop_heartbeat()
+    await _device_manager.disconnect_all()
+
     pool.shutdown(wait=True)
     logger.info("👋 服务已关闭")
 

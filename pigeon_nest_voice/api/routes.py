@@ -18,6 +18,12 @@ from pigeon_nest_voice.services.llm.deepseek import DeepSeekLLM
 from pigeon_nest_voice.intelligence.intent.keyword_parser import KeywordIntentParser
 from pigeon_nest_voice.intelligence.rules.engine import RuleEngine
 from pigeon_nest_voice.plugins.manager import PluginManager
+from pigeon_nest_voice.dispatcher.scheduler import TaskScheduler
+from pigeon_nest_voice.executor.manager import ExecutionManager
+from pigeon_nest_voice.executor.plugin_executor import PluginActionExecutor
+from pigeon_nest_voice.executor.device_executor import DeviceActionExecutor
+from pigeon_nest_voice.safety.guard import SafetyGuard
+from pigeon_nest_voice.devices.manager import DeviceManager
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +38,27 @@ _rule_engine = RuleEngine(
 )
 _plugin_mgr = PluginManager()
 _plugin_mgr.auto_discover()
+
+# ── 调度系统 ──
+_safety_guard = SafetyGuard()
+_device_manager = DeviceManager()
+_execution_manager = ExecutionManager()
+_device_executor = DeviceActionExecutor(device_manager=_device_manager)
+_plugin_executor = PluginActionExecutor(plugin_manager=_plugin_mgr)
+_execution_manager.register_executor(_device_executor)
+_execution_manager.register_executor(_plugin_executor)
+_task_scheduler = TaskScheduler(
+    execution_manager=_execution_manager,
+    safety_guard=_safety_guard,
+)
+
 _engine = PipelineEngine(
     llm=_llm,
     session_mgr=_session_mgr,
     intent_parser=_intent_parser,
     rule_engine=_rule_engine,
     plugin_manager=_plugin_mgr,
+    task_scheduler=_task_scheduler,
 )
 
 # ── STT / TTS（可选依赖，缺失时仅语音功能不可用） ──
@@ -200,3 +221,62 @@ async def delete_session(session_id: str):
     if _session_mgr.delete_session(session_id):
         return {"status": "ok", "message": f"会话 {session_id} 已删除"}
     raise HTTPException(status_code=404, detail="会话不存在")
+
+
+# ── 调度系统 API ──
+
+@router.get("/dispatcher/status")
+async def dispatcher_status():
+    """调度器状态概览。"""
+    return {
+        "running": _task_scheduler._running,
+        "estop_active": _task_scheduler._estop_active,
+        "queue_size": _task_scheduler.get_queue_size(),
+        "running_tasks": [t.to_dict() for t in _task_scheduler.get_running_tasks()],
+        "max_concurrent": _task_scheduler.max_concurrent,
+    }
+
+
+@router.get("/dispatcher/tasks/{task_id}")
+async def get_task(task_id: str):
+    """查询任务状态。"""
+    task = _task_scheduler.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return task.to_dict()
+
+
+@router.post("/dispatcher/estop")
+async def trigger_estop():
+    """触发紧急停止。"""
+    await _task_scheduler.emergency_stop()
+    return {"status": "ok", "message": "紧急停止已触发"}
+
+
+@router.post("/dispatcher/estop/clear")
+async def clear_estop():
+    """解除紧急停止。"""
+    _task_scheduler.clear_estop()
+    _safety_guard.deactivate_estop()
+    return {"status": "ok", "message": "紧急停止已解除"}
+
+
+@router.get("/devices")
+async def list_devices():
+    """列出所有已注册的设备。"""
+    return {"devices": _device_manager.list_devices()}
+
+
+@router.get("/dispatcher/executors")
+async def list_executors():
+    """列出所有已注册的执行器。"""
+    return {
+        "executors": _execution_manager.list_executors(),
+        "routes": _execution_manager.list_routes(),
+    }
+
+
+@router.get("/safety/audit")
+async def safety_audit(limit: int = 50):
+    """获取安全审计日志。"""
+    return {"audit_log": _safety_guard.get_audit_log(limit)}
