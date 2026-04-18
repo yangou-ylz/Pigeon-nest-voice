@@ -8,6 +8,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# 当消息数超过此阈值时，将早期消息压缩为摘要
+_SUMMARY_THRESHOLD = 30
+# 压缩后保留的最近消息轮数
+_KEEP_RECENT_ROUNDS = 8
+
 
 @dataclass
 class Session:
@@ -17,10 +22,14 @@ class Session:
     created_at: float = field(default_factory=time.time)
     last_active: float = field(default_factory=time.time)
     pending_task: Any = None            # PendingTask | None，任务澄清中间状态
+    summary: str = ""                   # 早期对话摘要（压缩后产生）
+    turn_count: int = 0                 # 总交互轮数
 
     def add_message(self, role: str, content: str):
         self.messages.append({"role": role, "content": content})
         self.last_active = time.time()
+        if role == "user":
+            self.turn_count += 1
 
     def get_messages(self, max_rounds: int = 20) -> list[dict]:
         """获取最近 max_rounds 轮对话（1轮 = 1条user + 1条assistant）。"""
@@ -28,6 +37,27 @@ class Session:
         if len(self.messages) <= max_msgs:
             return list(self.messages)
         return self.messages[-max_msgs:]
+
+    def needs_summary(self) -> bool:
+        """当消息数超过阈值时需要压缩。"""
+        return len(self.messages) > _SUMMARY_THRESHOLD
+
+    def compress(self, new_summary: str):
+        """压缩历史: 保留最近几轮，其余合入 summary。"""
+        keep_count = _KEEP_RECENT_ROUNDS * 2
+        self.summary = new_summary
+        self.messages = self.messages[-keep_count:]
+        logger.info("会话 %s 已压缩, 摘要长度=%d, 剩余消息=%d",
+                     self.session_id, len(new_summary), len(self.messages))
+
+    def get_history_text(self, max_msgs: int = 40) -> str:
+        """获取可读的对话历史文本（用于摘要生成）。"""
+        msgs = self.messages[:max_msgs] if len(self.messages) > max_msgs else self.messages
+        lines = []
+        for m in msgs:
+            prefix = "用户" if m["role"] == "user" else "助手"
+            lines.append(f"{prefix}: {m['content']}")
+        return "\n".join(lines)
 
     def clear_pending_task(self):
         self.pending_task = None
@@ -57,9 +87,51 @@ class SessionManager:
         logger.info("新建会话: %s (当前活跃: %d)", new_id, len(self._sessions))
         return session
 
+    def get_session(self, session_id: str) -> Session | None:
+        """获取已有会话，不存在返回 None。"""
+        return self._sessions.get(session_id)
+
+    def delete_session(self, session_id: str) -> bool:
+        """删除指定会话。"""
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+            logger.info("删除会话: %s", session_id)
+            return True
+        return False
+
+    def list_sessions(self) -> list[dict]:
+        """列出所有活跃会话的摘要信息。"""
+        result = []
+        for sid, s in self._sessions.items():
+            # 取最后一条用户消息作为预览
+            preview = ""
+            for m in reversed(s.messages):
+                if m["role"] == "user":
+                    preview = m["content"][:50]
+                    break
+            result.append({
+                "session_id": sid,
+                "turn_count": s.turn_count,
+                "message_count": len(s.messages),
+                "has_summary": bool(s.summary),
+                "preview": preview,
+                "created_at": s.created_at,
+                "last_active": s.last_active,
+            })
+        result.sort(key=lambda x: x["last_active"], reverse=True)
+        return result
+
     def build_llm_messages(self, session: Session) -> list[dict]:
-        """构建发给 LLM 的完整消息列表（含 system prompt）。"""
+        """构建发给 LLM 的完整消息列表（含 system prompt + 摘要）。"""
         msgs = [{"role": "system", "content": self.SYSTEM_PROMPT}]
+
+        # 如有历史摘要，注入上下文
+        if session.summary:
+            msgs.append({
+                "role": "system",
+                "content": f"以下是之前对话的摘要，请参考：\n{session.summary}",
+            })
+
         msgs.extend(session.get_messages(self._max_rounds))
         return msgs
 

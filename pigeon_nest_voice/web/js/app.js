@@ -8,11 +8,80 @@ const sendBtn = document.getElementById("sendBtn");
 const micBtn = document.getElementById("micBtn");
 const voiceStatus = document.getElementById("voiceStatus");
 const voiceStatusText = document.getElementById("voiceStatusText");
+const newChatBtn = document.getElementById("newChatBtn");
+const sessionInfo = document.getElementById("sessionInfo");
 
-let sessionId = null;
+let sessionId = localStorage.getItem("pnv_session_id") || null;
+let turnCount = 0;
 let mediaRecorder = null;
 let audioChunks = [];
 let isRecording = false;
+
+// ── 会话管理 ──
+
+/** 保存 sessionId 到 localStorage */
+function saveSession(sid) {
+    sessionId = sid;
+    if (sid) {
+        localStorage.setItem("pnv_session_id", sid);
+    } else {
+        localStorage.removeItem("pnv_session_id");
+    }
+    updateSessionInfo();
+}
+
+/** 更新会话信息显示 */
+function updateSessionInfo() {
+    if (sessionId) {
+        sessionInfo.textContent = `💬 ${turnCount} 轮 · ${sessionId.slice(0, 6)}`;
+        sessionInfo.title = `会话: ${sessionId}\n对话轮数: ${turnCount}`;
+    } else {
+        sessionInfo.textContent = "";
+    }
+}
+
+/** 开始新对话 */
+function startNewChat() {
+    saveSession(null);
+    turnCount = 0;
+    chatArea.innerHTML = "";
+    appendMessage("assistant", "你好！我是鸽子窝语音助手，有什么可以帮你的？");
+    textInput.focus();
+}
+
+newChatBtn.addEventListener("click", startNewChat);
+
+// 页面加载时如有会话，尝试恢复
+if (sessionId) {
+    fetch(`/api/sessions/${sessionId}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            if (data && data.messages && data.messages.length > 0) {
+                turnCount = data.turn_count || 0;
+                chatArea.innerHTML = "";  // 清掉默认欢迎语
+                // 恢复最近的消息（最多显示最近20轮）
+                const msgs = data.messages.slice(-40);
+                for (const m of msgs) {
+                    appendMessage(m.role === "user" ? "user" : "assistant", m.content);
+                }
+                if (data.has_summary) {
+                    // 在顶部显示摘要提示
+                    const hint = document.createElement("div");
+                    hint.className = "message system-hint";
+                    hint.innerHTML = '<div class="bubble system-bubble">📋 已加载历史摘要，可继续之前的对话</div>';
+                    chatArea.insertBefore(hint, chatArea.firstChild);
+                }
+                updateSessionInfo();
+            } else {
+                // 会话不存在或为空，重置
+                saveSession(null);
+            }
+        })
+        .catch(() => {
+            // 获取失败，忽略
+            saveSession(null);
+        });
+}
 
 // ── 消息气泡 ──
 
@@ -74,7 +143,9 @@ async function sendMessage() {
         }
 
         const data = await resp.json();
-        sessionId = data.session_id;
+        saveSession(data.session_id);
+        turnCount++;
+        updateSessionInfo();
         appendMessage("assistant", data.reply);
     } catch (e) {
         appendMessage("assistant", `⚠️ 出错了: ${e.message}`);
@@ -168,7 +239,9 @@ async function sendVoice(audioBlob) {
         }
 
         const data = await resp.json();
-        sessionId = data.session_id;
+        saveSession(data.session_id);
+        turnCount++;
+        updateSessionInfo();
 
         // 更新用户气泡显示识别文字
         if (data.recognized_text) {

@@ -3,12 +3,18 @@
 import logging
 
 from pigeon_nest_voice.services.llm.base import BaseLLM
-from pigeon_nest_voice.core.session import SessionManager
+from pigeon_nest_voice.core.session import SessionManager, Session
 from pigeon_nest_voice.intelligence.intent.base import BaseIntentParser, Intent, IntentType, PendingTask
 from pigeon_nest_voice.intelligence.rules.engine import RuleEngine, Rule
 from pigeon_nest_voice.plugins.manager import PluginManager
 
 logger = logging.getLogger(__name__)
+
+# 摘要生成提示词
+_SUMMARY_PROMPT = (
+    "请将以下对话历史压缩为一段简洁的中文摘要（不超过200字），"
+    "保留关键事实、用户偏好和重要结论，去掉闲聊和重复内容。\n\n"
+)
 
 
 class PipelineEngine:
@@ -48,12 +54,17 @@ class PipelineEngine:
     async def process_text(self, text: str, session_id: str | None = None) -> tuple[str, str]:
         """处理文字输入，返回 (回复文字, session_id)。"""
         session = self.session_mgr.get_or_create(session_id)
-        logger.info("收到输入: '%s' (session=%s)", text[:80], session.session_id)
+        logger.info("收到输入: '%s' (session=%s, turn=%d)",
+                     text[:80], session.session_id, session.turn_count)
 
         # ── 优先处理待澄清任务 ──
         if session.pending_task is not None:
             logger.debug("进入澄清流程 (待补字段: %s)", session.pending_task.asked_field)
             reply = self._handle_clarification(text, session)
+            # 澄清也记入历史
+            session.add_message("user", text)
+            session.add_message("assistant", reply)
+            await self._maybe_compress(session)
             return reply, session.session_id
 
         # ── 正常流程: 意图解析 ──
@@ -62,14 +73,20 @@ class PipelineEngine:
         if intent.is_task:
             logger.info("→ 任务分支: action=%s, params=%s", intent.action, intent.params)
             reply = await self._handle_task(intent, session)
+            # 任务交互也记入历史，使 LLM 感知上下文
+            session.add_message("user", text)
+            session.add_message("assistant", reply)
         else:
             logger.info("→ 对话分支: 交给LLM")
             reply = await self._handle_chat(text, session)
 
+        # ── 检查是否需要压缩历史 ──
+        await self._maybe_compress(session)
+
         logger.debug("回复: '%s'", reply[:100] if reply else "")
         return reply, session.session_id
 
-    async def _handle_chat(self, text: str, session) -> str:
+    async def _handle_chat(self, text: str, session: Session) -> str:
         """对话分支: 走 LLM。"""
         session.add_message("user", text)
         messages = self.session_mgr.build_llm_messages(session)
@@ -77,7 +94,7 @@ class PipelineEngine:
         session.add_message("assistant", reply)
         return reply
 
-    async def _handle_task(self, intent: Intent, session) -> str:
+    async def _handle_task(self, intent: Intent, session: Session) -> str:
         """任务分支: 优先走插件，无插件则走规则引擎。"""
         # ── 插件优先 ──
         if self.plugin_manager and self.plugin_manager.has_action(intent.action):
@@ -158,3 +175,20 @@ class PipelineEngine:
 
         prompt = next_missing.clarify_prompt or f"请补充 {next_missing.name} 信息。"
         return prompt
+
+    async def _maybe_compress(self, session: Session):
+        """如果会话消息过长，用 LLM 生成摘要后压缩。"""
+        if not session.needs_summary():
+            return
+        try:
+            history_text = session.get_history_text()
+            if session.summary:
+                history_text = f"已有摘要: {session.summary}\n\n新对话:\n{history_text}"
+            summary_msgs = [
+                {"role": "system", "content": _SUMMARY_PROMPT},
+                {"role": "user", "content": history_text},
+            ]
+            new_summary = await self.llm.chat(summary_msgs)
+            session.compress(new_summary)
+        except Exception:
+            logger.warning("会话摘要生成失败，跳过压缩", exc_info=True)

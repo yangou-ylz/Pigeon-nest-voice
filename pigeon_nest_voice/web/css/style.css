@@ -41,6 +41,7 @@ body {
     padding: 20px 24px 12px;
     text-align: center;
     border-bottom: 1px solid rgba(255,255,255,0.06);
+    position: relative;
 }
 
 .app-header h1 {
@@ -52,6 +53,49 @@ body {
     font-size: 0.85rem;
     color: var(--text-muted);
     margin-top: 4px;
+}
+
+.header-actions {
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.session-info {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+#newChatBtn {
+    font-size: 1rem;
+    padding: 4px 8px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+#newChatBtn:hover {
+    background: rgba(255,255,255,0.15);
+}
+
+.system-hint {
+    align-self: center !important;
+    max-width: 100% !important;
+}
+
+.system-bubble {
+    background: rgba(233, 69, 96, 0.15) !important;
+    color: var(--text-muted) !important;
+    font-size: 0.8rem !important;
+    text-align: center;
 }
 
 /* ── 对话区域 ── */

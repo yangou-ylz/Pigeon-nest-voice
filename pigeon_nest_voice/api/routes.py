@@ -166,3 +166,37 @@ async def tts(req: TTSRequest):
     except Exception as e:
         logger.exception("TTS error")
         raise HTTPException(status_code=500, detail=f"语音合成失败: {e}")
+
+
+# ── 会话管理 ──
+
+@router.get("/sessions")
+async def list_sessions():
+    """列出所有活跃会话。"""
+    return {"sessions": _session_mgr.list_sessions()}
+
+
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: str):
+    """获取指定会话的详情和历史消息。"""
+    session = _session_mgr.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {
+        "session_id": session.session_id,
+        "turn_count": session.turn_count,
+        "message_count": len(session.messages),
+        "has_summary": bool(session.summary),
+        "summary": session.summary or "",
+        "messages": session.messages[-40:],  # 最多返回最近40条
+        "created_at": session.created_at,
+        "last_active": session.last_active,
+    }
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """删除指定会话。"""
+    if _session_mgr.delete_session(session_id):
+        return {"status": "ok", "message": f"会话 {session_id} 已删除"}
+    raise HTTPException(status_code=404, detail="会话不存在")
