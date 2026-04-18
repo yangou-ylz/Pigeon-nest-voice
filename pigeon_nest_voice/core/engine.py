@@ -6,6 +6,7 @@ from pigeon_nest_voice.services.llm.base import BaseLLM
 from pigeon_nest_voice.core.session import SessionManager
 from pigeon_nest_voice.intelligence.intent.base import BaseIntentParser, Intent, IntentType, PendingTask
 from pigeon_nest_voice.intelligence.rules.engine import RuleEngine, Rule
+from pigeon_nest_voice.plugins.manager import PluginManager
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +37,13 @@ class PipelineEngine:
         session_mgr: SessionManager,
         intent_parser: BaseIntentParser,
         rule_engine: RuleEngine,
+        plugin_manager=None,
     ):
         self.llm = llm
         self.session_mgr = session_mgr
         self.intent_parser = intent_parser
         self.rule_engine = rule_engine
+        self.plugin_manager = plugin_manager
 
     async def process_text(self, text: str, session_id: str | None = None) -> tuple[str, str]:
         """处理文字输入，返回 (回复文字, session_id)。"""
@@ -58,7 +61,7 @@ class PipelineEngine:
 
         if intent.is_task:
             logger.info("→ 任务分支: action=%s, params=%s", intent.action, intent.params)
-            reply = self._handle_task(intent, session)
+            reply = await self._handle_task(intent, session)
         else:
             logger.info("→ 对话分支: 交给LLM")
             reply = await self._handle_chat(text, session)
@@ -74,8 +77,18 @@ class PipelineEngine:
         session.add_message("assistant", reply)
         return reply
 
-    def _handle_task(self, intent: Intent, session) -> str:
-        """任务分支: 走规则引擎，检查参数完整性。"""
+    async def _handle_task(self, intent: Intent, session) -> str:
+        """任务分支: 优先走插件，无插件则走规则引擎。"""
+        # ── 插件优先 ──
+        if self.plugin_manager and self.plugin_manager.has_action(intent.action):
+            result = await self.plugin_manager.execute(intent.action, intent.params)
+            if result and result.success:
+                return result.message
+            elif result:
+                logger.warning("插件执行失败: %s → %s", intent.action, result.message)
+                # 失败时 fallback 到规则引擎
+
+        # ── 规则引擎 ──
         rule = self.rule_engine.match(intent.action, intent.params)
         if not rule:
             return f"已识别任务「{intent.action}」，参数: {intent.params}，但暂无对应规则。"

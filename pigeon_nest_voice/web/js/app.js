@@ -197,6 +197,59 @@ async function sendVoice(audioBlob) {
 function playAudio(base64Data, contentType) {
     const audio = new Audio(`data:${contentType};base64,${base64Data}`);
     audio.play().catch((e) => console.warn("Audio playback failed:", e));
+    return audio;
+}
+
+// ── 朗读文本 ──
+
+let currentAudio = null;
+
+async function speakText(text, btn) {
+    // 如果正在播放，点击则停止
+    if (currentAudio && !currentAudio.paused) {
+        currentAudio.pause();
+        currentAudio = null;
+        btn.textContent = "🔊";
+        return;
+    }
+
+    btn.textContent = "⏳";
+    btn.disabled = true;
+
+    try {
+        const resp = await fetch("/api/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+        });
+
+        if (!resp.ok) throw new Error(`TTS 失败: HTTP ${resp.status}`);
+
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        currentAudio = new Audio(url);
+
+        btn.textContent = "⏹️";
+        btn.disabled = false;
+
+        currentAudio.addEventListener("ended", () => {
+            btn.textContent = "🔊";
+            currentAudio = null;
+            URL.revokeObjectURL(url);
+        });
+
+        currentAudio.addEventListener("error", () => {
+            btn.textContent = "🔊";
+            currentAudio = null;
+            URL.revokeObjectURL(url);
+        });
+
+        await currentAudio.play();
+    } catch (e) {
+        console.warn("TTS error:", e);
+        btn.textContent = "🔊";
+        btn.disabled = false;
+    }
 }
 
 /** 朗读文字（调用 /api/tts） */

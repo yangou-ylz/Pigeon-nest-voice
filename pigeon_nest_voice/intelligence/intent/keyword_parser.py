@@ -73,6 +73,14 @@ _BUILTIN_RULES: list[_KeywordRule] = [
         action="control_device",
         param_extractor=None,
     ),
+
+    # ── 查询系统信息 ──
+    _KeywordRule(
+        pattern=re.compile(r"系统(?:信息|状态|状况|情况)|(?:服务器|电脑|机器)(?:状态|状况|信息)"),
+        intent_type=IntentType.TASK_QUERY,
+        action="query_system",
+        param_extractor=None,
+    ),
 ]
 
 

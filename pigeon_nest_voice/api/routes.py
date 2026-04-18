@@ -17,6 +17,7 @@ from pigeon_nest_voice.core.session import SessionManager
 from pigeon_nest_voice.services.llm.deepseek import DeepSeekLLM
 from pigeon_nest_voice.intelligence.intent.keyword_parser import KeywordIntentParser
 from pigeon_nest_voice.intelligence.rules.engine import RuleEngine
+from pigeon_nest_voice.plugins.manager import PluginManager
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +30,14 @@ _intent_parser = KeywordIntentParser()
 _rule_engine = RuleEngine(
     rules_dir=Path(__file__).parent.parent.parent / "rules_config"
 )
+_plugin_mgr = PluginManager()
+_plugin_mgr.auto_discover()
 _engine = PipelineEngine(
     llm=_llm,
     session_mgr=_session_mgr,
     intent_parser=_intent_parser,
     rule_engine=_rule_engine,
+    plugin_manager=_plugin_mgr,
 )
 
 # ── STT / TTS（可选依赖，缺失时仅语音功能不可用） ──
@@ -60,6 +64,19 @@ async def health():
         app_name=settings.app_name,
         version="0.1.0",
     )
+
+
+@router.get("/plugins")
+async def list_plugins():
+    """列出所有已加载的插件。"""
+    plugins = []
+    for name, plugin in _plugin_mgr._plugins.items():
+        plugins.append({
+            "name": name,
+            "description": plugin.description,
+            "actions": plugin.actions,
+        })
+    return {"plugins": plugins, "total": len(plugins)}
 
 
 @router.post("/chat", response_model=ChatResponse)
